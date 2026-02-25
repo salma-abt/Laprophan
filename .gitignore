@@ -1,0 +1,31 @@
+# IDE / Antigravity
+.vscode/
+.idea/
+*.swp
+
+# Python / PySpark Temp
+__pycache__/
+*.py[cod]
+*~
+.ipynb_checkpoints/
+
+# Fichiers de données locaux (INTERDIT DE PUSHER DES DONNÉES)
+*.csv
+*.xlsx
+*.parquet
+*.delta/
+data/
+mock_data_local/
+
+# Variables d'environnement & Secrets (BPF Security)
+.env
+secrets.json
+credentials.xml
+
+# Power BI (Ignorer les binaires, utiliser le format .pbip)
+*.pbix
+.pbi/local-cache/
+
+# OS
+.DS_Store
+Thumbs.db

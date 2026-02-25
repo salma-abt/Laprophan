@@ -1,0 +1,62 @@
+// --- 04_DAX_Measures.dax ---
+// Rôle : Agrégation des 3 Tables Gold du CDC Section 4.2
+// (performance_metrics, fva_results, alertes_derive)
+
+// ==========================================
+// 1. LES 8 KPIs DE PERFORMANCE (GOLD_PERFORMANCE_METRICS)
+// ==========================================
+
+Avg_MAPE = AVERAGE('GOLD_PERFORMANCE_METRICS'[MAPE])
+Avg_sMAPE = AVERAGE('GOLD_PERFORMANCE_METRICS'[sMAPE])
+Global_WAPE = AVERAGE('GOLD_PERFORMANCE_METRICS'[WAPE]) // WAPE est déjà pondéré en PySpark, on le moyenne par segment
+Avg_MAE = AVERAGE('GOLD_PERFORMANCE_METRICS'[MAE])
+Avg_RMSE = AVERAGE('GOLD_PERFORMANCE_METRICS'[RMSE])
+Avg_Bias = AVERAGE('GOLD_PERFORMANCE_METRICS'[Bias]) // Positif = Surestimé, Négatif = Sous-estimé
+Avg_Tracking_Signal = AVERAGE('GOLD_PERFORMANCE_METRICS'[Tracking_Signal])
+Avg_Theils_U = AVERAGE('GOLD_PERFORMANCE_METRICS'[Theils_U]) // Proche de 0 = Excellent, > 1 = Pire qu'une méthode Naïve
+
+// Sélection du "Best Algo" dynamiquement dans Power BI
+Best_Algo_Name = 
+CALCULATE(
+    MIN('GOLD_PERFORMANCE_METRICS'[Algorithm]),
+    TOPN(1, 'GOLD_PERFORMANCE_METRICS', 'GOLD_PERFORMANCE_METRICS'[MAPE], ASC)
+)
+
+// ==========================================
+// 2. FVA & COMPORTEMENT HUMAIN (GOLD_FVA_RESULTS)
+// ==========================================
+
+Avg_FVA_Humain = AVERAGE('GOLD_FVA_RESULTS'[FVA_Humain_vs_Algo])
+// Si Avg_FVA_Humain > 0, l'humain a réduit l'erreur de l'algo (Value Added).
+// Si Avg_FVA_Humain < 0, l'humain a augmenté l'erreur de l'algo (Value Destroyed).
+
+Global_Override_Rate_Pct = AVERAGE('GOLD_FVA_RESULTS'[Override_Rate]) * 100
+
+// ==========================================
+// 3. ALERTES DE DÉRIVE ET RUPTURES (GOLD_ALERTES_DERIVE)
+// ==========================================
+
+Count_Derives_Detectees = 
+CALCULATE(
+    COUNTROWS('GOLD_ALERTES_DERIVE'),
+    'GOLD_ALERTES_DERIVE'[Tracking_Signal_Alert] = "DERIVE_DETECTEE"
+)
+
+Count_Danger_Rupture = 
+CALCULATE(
+    COUNTROWS('GOLD_ALERTES_DERIVE'),
+    'GOLD_ALERTES_DERIVE'[Alertes_Rupture_Surstock] = "DANGER RUPTURE : Sous-prévision flagrante sur flux matériel."
+)
+
+Count_Danger_Surstock = 
+CALCULATE(
+    COUNTROWS('GOLD_ALERTES_DERIVE'),
+    'GOLD_ALERTES_DERIVE'[Alertes_Rupture_Surstock] = "DANGER SURSTOCK : Immobilisation financière."
+)
+
+// Recommendation Textuelle (Affichage IA)
+Dynamic_AI_Recommendation = 
+SELECTEDVALUE(
+    'GOLD_ALERTES_DERIVE'[Recommandation_Claude_IA], 
+    "Sélectionnez un algorithme et un article pour voir la recommandation de dérive."
+)
