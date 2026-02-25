@@ -1,62 +1,590 @@
-// --- 04_DAX_Measures.dax ---
-// Rôle : Agrégation des 3 Tables Gold du CDC Section 4.2
-// (performance_metrics, fva_results, alertes_derive)
+// =============================================================================
+// FAAS4U — Laprophan | Power BI DAX Measures
+// Fichier  : 04_DAX_Measures.dax
+// Auteure  : Salma | PFE Mundiapolis 2026
+// Encadrant: M. Kahlaoui
+// Rôle     : Mesures DAX pour les scorecards Power BI
+//             Sources : performance_metrics / fva_results / alertes_derive
+// =============================================================================
+// ORGANISATION :
+//   Section 1  — Mesures de base (MAPE, WAPE, Biais, RMSE)
+//   Section 2  — Tracking Signal et dérives
+//   Section 3  — Limited Theil's U
+//   Section 4  — Forecast Value Added (FVA)
+//   Section 5  — Scorecards ABC/XYZ
+//   Section 6  — KPIs Lead Time
+//   Section 7  — Alertes et monitoring
+//   Section 8  — Mesures de navigation et contexte
+// =============================================================================
 
-// ==========================================
-// 1. LES 8 KPIs DE PERFORMANCE (GOLD_PERFORMANCE_METRICS)
-// ==========================================
 
-Avg_MAPE = AVERAGE('GOLD_PERFORMANCE_METRICS'[MAPE])
-Avg_sMAPE = AVERAGE('GOLD_PERFORMANCE_METRICS'[sMAPE])
-Global_WAPE = AVERAGE('GOLD_PERFORMANCE_METRICS'[WAPE]) // WAPE est déjà pondéré en PySpark, on le moyenne par segment
-Avg_MAE = AVERAGE('GOLD_PERFORMANCE_METRICS'[MAE])
-Avg_RMSE = AVERAGE('GOLD_PERFORMANCE_METRICS'[RMSE])
-Avg_Bias = AVERAGE('GOLD_PERFORMANCE_METRICS'[Bias]) // Positif = Surestimé, Négatif = Sous-estimé
-Avg_Tracking_Signal = AVERAGE('GOLD_PERFORMANCE_METRICS'[Tracking_Signal])
-Avg_Theils_U = AVERAGE('GOLD_PERFORMANCE_METRICS'[Theils_U]) // Proche de 0 = Excellent, > 1 = Pire qu'une méthode Naïve
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 1 — MESURES DE BASE
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Sélection du "Best Algo" dynamiquement dans Power BI
-Best_Algo_Name = 
+// MAPE moyen — filtré sur le contexte (segment, algo, horizon)
+MAPE Moyen =
+AVERAGEX(
+    performance_metrics,
+    performance_metrics[mape]
+)
+
+// MAPE pondéré par le nombre d'observations
+MAPE Pondéré =
+DIVIDE(
+    SUMX(performance_metrics, performance_metrics[mape] * performance_metrics[nb_observations]),
+    SUM(performance_metrics[nb_observations]),
+    BLANK()
+)
+
+// WAPE moyen
+WAPE Moyen =
+AVERAGEX(
+    performance_metrics,
+    performance_metrics[wape]
+)
+
+// MAE moyen (en unités)
+MAE Moyen =
+AVERAGEX(
+    performance_metrics,
+    performance_metrics[mae]
+)
+
+// RMSE moyen
+RMSE Moyen =
+AVERAGEX(
+    performance_metrics,
+    performance_metrics[rmse]
+)
+
+// Biais moyen (positif = sur-prévision, négatif = sous-prévision)
+Biais Moyen =
+AVERAGEX(
+    performance_metrics,
+    performance_metrics[biais_pct]
+)
+
+// Biais absolu moyen (amplitude sans direction)
+Biais Absolu Moyen =
+AVERAGEX(
+    performance_metrics,
+    ABS(performance_metrics[biais_pct])
+)
+
+// sMAPE moyen
+sMAPE Moyen =
+AVERAGEX(
+    performance_metrics,
+    performance_metrics[smape]
+)
+
+// Nombre total d'observations (SKU x période x algo)
+Nb Observations =
+SUM(performance_metrics[nb_observations])
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 2 — TRACKING SIGNAL ET DÉRIVES
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Tracking Signal moyen (seuil ±6)
+Tracking Signal Moyen =
+AVERAGEX(
+    performance_metrics,
+    performance_metrics[tracking_signal]
+)
+
+// Valeur absolue du Tracking Signal (pour jauge)
+Tracking Signal Absolu =
+ABS([Tracking Signal Moyen])
+
+// Nombre de dérives détectées (Tracking Signal hors ±6)
+Nb Dérives =
 CALCULATE(
-    MIN('GOLD_PERFORMANCE_METRICS'[Algorithm]),
-    TOPN(1, 'GOLD_PERFORMANCE_METRICS', 'GOLD_PERFORMANCE_METRICS'[MAPE], ASC)
+    COUNTROWS(performance_metrics),
+    performance_metrics[flag_derive] = TRUE()
 )
 
-// ==========================================
-// 2. FVA & COMPORTEMENT HUMAIN (GOLD_FVA_RESULTS)
-// ==========================================
+// % de combinaisons algo/segment en dérive
+Taux Dérive % =
+DIVIDE(
+    [Nb Dérives],
+    COUNTROWS(performance_metrics),
+    0
+) * 100
 
-Avg_FVA_Humain = AVERAGE('GOLD_FVA_RESULTS'[FVA_Humain_vs_Algo])
-// Si Avg_FVA_Humain > 0, l'humain a réduit l'erreur de l'algo (Value Added).
-// Si Avg_FVA_Humain < 0, l'humain a augmenté l'erreur de l'algo (Value Destroyed).
+// Indicateur dérive — pour KPI card avec couleur conditionnelle
+// Retourne "ALERTE" si dérive, "OK" sinon
+Statut Dérive =
+IF(
+    [Nb Dérives] > 0,
+    "⚠ ALERTE — " & [Nb Dérives] & " dérive(s) détectée(s)",
+    "✓ Stable"
+)
 
-Global_Override_Rate_Pct = AVERAGE('GOLD_FVA_RESULTS'[Override_Rate]) * 100
 
-// ==========================================
-// 3. ALERTES DE DÉRIVE ET RUPTURES (GOLD_ALERTES_DERIVE)
-// ==========================================
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 3 — LIMITED THEIL'S U
+// ─────────────────────────────────────────────────────────────────────────────
 
-Count_Derives_Detectees = 
+// Theil's U moyen
+Theil U Moyen =
+AVERAGEX(
+    performance_metrics,
+    performance_metrics[theil_u]
+)
+
+// % d'algorithmes avec valeur ajoutée réelle (U < 1)
+% Algos Valeur Ajoutée =
+DIVIDE(
+    CALCULATE(
+        COUNTROWS(performance_metrics),
+        performance_metrics[theil_u] < 1
+    ),
+    COUNTROWS(performance_metrics),
+    0
+) * 100
+
+// Interprétation Theil's U — pour card visuelle
+Interprétation Theil U =
+VAR u = [Theil U Moyen]
+RETURN
+    SWITCH(
+        TRUE(),
+        u < 0.5,  "Excellent — bien meilleur que naïf",
+        u < 1.0,  "Bon — meilleur que naïf",
+        u = 1.0,  "Neutre — équivalent au naïf",
+        u > 1.0,  "⚠ Insuffisant — pire que naïf"
+    )
+
+// Theil's U du meilleur algorithme par segment (contexte filtré)
+Theil U Meilleur Algo =
 CALCULATE(
-    COUNTROWS('GOLD_ALERTES_DERIVE'),
-    'GOLD_ALERTES_DERIVE'[Tracking_Signal_Alert] = "DERIVE_DETECTEE"
+    MIN(performance_metrics[theil_u]),
+    performance_metrics[theil_u] > 0
 )
 
-Count_Danger_Rupture = 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 4 — FORECAST VALUE ADDED (FVA)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// MAPE de la prévision naïve (baseline)
+MAPE Naïf =
+AVERAGEX(
+    fva_results,
+    fva_results[mape_naive]
+)
+
+// MAPE du meilleur algorithme
+MAPE Meilleur Algo =
+AVERAGEX(
+    fva_results,
+    fva_results[mape_best_algo]
+)
+
+// MAPE après correction Demand Planner
+MAPE Demand Planner =
+AVERAGEX(
+    fva_results,
+    fva_results[mape_dp]
+)
+
+// FVA de l'algorithme (gain vs baseline naïve)
+FVA Algo pts =
+AVERAGEX(
+    fva_results,
+    fva_results[fva_algo_pts]
+)
+
+// FVA du Demand Planner (gain vs meilleur algo)
+FVA Humain pts =
+AVERAGEX(
+    fva_results,
+    fva_results[fva_humain_pts]
+)
+
+// FVA total (gain total vs baseline naïve)
+FVA Total pts =
+AVERAGEX(
+    fva_results,
+    fva_results[fva_total_pts]
+)
+
+// Verdict global sur la valeur ajoutée humaine
+Verdict FVA Humain =
+VAR fva = [FVA Humain pts]
+RETURN
+    SWITCH(
+        TRUE(),
+        fva >  2,  "✓ Humain surperforme — conserver les corrections",
+        fva >= 0,  "→ Humain neutre — évaluer la pertinence",
+        fva >= -2, "⚠ Humain dégrade légèrement — former le DP",
+        "✗ Humain dégrade significativement — bloquer les overrides"
+    )
+
+// % de segments où l'humain ajoute de la valeur
+% Segments FVA Positif =
+DIVIDE(
+    CALCULATE(
+        COUNTROWS(fva_results),
+        fva_results[fva_humain_pts] > 0
+    ),
+    COUNTROWS(fva_results),
+    0
+) * 100
+
+// Meilleur algorithme dans le contexte sélectionné
+Meilleur Algorithme =
 CALCULATE(
-    COUNTROWS('GOLD_ALERTES_DERIVE'),
-    'GOLD_ALERTES_DERIVE'[Alertes_Rupture_Surstock] = "DANGER RUPTURE : Sous-prévision flagrante sur flux matériel."
+    FIRSTNONBLANK(fva_results[meilleur_algo], 1),
+    TOPN(1, fva_results, fva_results[mape_best_algo], ASC)
 )
 
-Count_Danger_Surstock = 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 5 — SCORECARDS ABC/XYZ
+// ─────────────────────────────────────────────────────────────────────────────
+
+// MAPE par segment — utilisé dans la heatmap ABC/XYZ
+MAPE Segment =
 CALCULATE(
-    COUNTROWS('GOLD_ALERTES_DERIVE'),
-    'GOLD_ALERTES_DERIVE'[Alertes_Rupture_Surstock] = "DANGER SURSTOCK : Immobilisation financière."
+    [MAPE Moyen],
+    ALLEXCEPT(performance_metrics, performance_metrics[segment_abcxyz])
 )
 
-// Recommendation Textuelle (Affichage IA)
-Dynamic_AI_Recommendation = 
-SELECTEDVALUE(
-    'GOLD_ALERTES_DERIVE'[Recommandation_Claude_IA], 
-    "Sélectionnez un algorithme et un article pour voir la recommandation de dérive."
+// Cible MAPE du segment sélectionné
+Cible MAPE Segment =
+CALCULATE(
+    AVERAGE(performance_metrics[mape_cible]),
+    ALLEXCEPT(performance_metrics, performance_metrics[segment_abc])
 )
+
+// Écart à la cible MAPE (positif = hors cible)
+Écart Cible MAPE =
+[MAPE Moyen] - [Cible MAPE Segment]
+
+// Couleur conditionnelle pour heatmap (retourne un code hex)
+Couleur MAPE =
+VAR ecart = [Écart Cible MAPE]
+RETURN
+    SWITCH(
+        TRUE(),
+        ecart <= -5,  "#1A7340",   // Vert foncé — très en dessous de la cible
+        ecart <= 0,   "#4CAF50",   // Vert — en dessous de la cible
+        ecart <= 5,   "#FF9800",   // Orange — légèrement au-dessus
+        ecart <= 10,  "#F44336",   // Rouge — au-dessus
+        "#8B0000"                  // Rouge foncé — très au-dessus
+    )
+
+// % de SKUs segment A atteignant la cible MAPE < 10%
+% SKUs A Cible Atteinte =
+DIVIDE(
+    CALCULATE(
+        COUNTROWS(performance_metrics),
+        performance_metrics[segment_abc] = "A",
+        performance_metrics[mape] <= 10
+    ),
+    CALCULATE(
+        COUNTROWS(performance_metrics),
+        performance_metrics[segment_abc] = "A"
+    ),
+    0
+) * 100
+
+// % de SKUs segment B atteignant la cible MAPE < 20%
+% SKUs B Cible Atteinte =
+DIVIDE(
+    CALCULATE(
+        COUNTROWS(performance_metrics),
+        performance_metrics[segment_abc] = "B",
+        performance_metrics[mape] <= 20
+    ),
+    CALCULATE(
+        COUNTROWS(performance_metrics),
+        performance_metrics[segment_abc] = "B"
+    ),
+    0
+) * 100
+
+// % de SKUs segment C atteignant la cible MAPE < 40%
+% SKUs C Cible Atteinte =
+DIVIDE(
+    CALCULATE(
+        COUNTROWS(performance_metrics),
+        performance_metrics[segment_abc] = "C",
+        performance_metrics[mape] <= 40
+    ),
+    CALCULATE(
+        COUNTROWS(performance_metrics),
+        performance_metrics[segment_abc] = "C"
+    ),
+    0
+) * 100
+
+// Score de certification global (moyenne pondérée des 3 segments)
+Score Certification Global =
+( [% SKUs A Cible Atteinte] * 0.6 ) +
+( [% SKUs B Cible Atteinte] * 0.3 ) +
+( [% SKUs C Cible Atteinte] * 0.1 )
+
+// Titre dynamique du scorecard (adapté au filtre sélectionné)
+Titre Scorecard =
+VAR seg = SELECTEDVALUE(performance_metrics[segment_abcxyz], "Tous segments")
+VAR algo = SELECTEDVALUE(performance_metrics[algorithme], "Tous algorithmes")
+VAR horizon = SELECTEDVALUE(performance_metrics[horizon_mois], 0)
+RETURN
+    "Performance " & algo &
+    " | Segment " & seg &
+    IF(horizon > 0, " | Horizon " & horizon & " mois", "")
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 6 — KPIs LEAD TIME
+// ─────────────────────────────────────────────────────────────────────────────
+// Ces mesures lisent la table forecasts_clean (Silver) qui contient
+// les 4 étapes du Lead Time joinées avec les forecasts et actuals.
+
+// Lead Time Besoins moyen (jours)
+LT Besoins Moyen =
+AVERAGE(forecasts_clean[lt_besoins_jours])
+
+// Lead Time Fabrication moyen (jours)
+LT Fabrication Moyen =
+AVERAGE(forecasts_clean[lt_fabrication_jours])
+
+// Lead Time Libération moyen (jours)
+LT Libération Moyen =
+AVERAGE(forecasts_clean[lt_liberation_jours])
+
+// Lead Time Diffusion moyen (jours)
+LT Diffusion Moyen =
+AVERAGE(forecasts_clean[lt_diffusion_jours])
+
+// Lead Time Total moyen (somme des 4 étapes)
+LT Total Moyen =
+AVERAGE(forecasts_clean[lt_total_jours])
+
+// % de SKUs avec Lead Time Total > 90 jours (seuil critique)
+% SKUs LT Critique =
+DIVIDE(
+    CALCULATE(
+        DISTINCTCOUNT(forecasts_clean[sku_id]),
+        forecasts_clean[lt_total_jours] > 90
+    ),
+    DISTINCTCOUNT(forecasts_clean[sku_id]),
+    0
+) * 100
+
+// MAPE moyen sur les SKUs avec Lead Time anormal (> 90 jours)
+// Permet de voir si le LT long dégrade la précision du forecast
+MAPE SKUs LT Long =
+CALCULATE(
+    [MAPE Moyen],
+    FILTER(
+        forecasts_clean,
+        forecasts_clean[lt_total_jours] > 90
+    )
+)
+
+// Corrélation textuelle LT vs MAPE — pour card narrative
+Impact LT sur MAPE =
+VAR mape_lt_long  = [MAPE SKUs LT Long]
+VAR mape_lt_court = CALCULATE(
+    [MAPE Moyen],
+    FILTER(forecasts_clean, forecasts_clean[lt_total_jours] <= 90)
+)
+VAR diff = mape_lt_long - mape_lt_court
+RETURN
+    SWITCH(
+        TRUE(),
+        diff > 10, "⚠ Lead Time long dégrade le MAPE de " & FORMAT(diff, "0.0") & " pts",
+        diff > 5,  "→ Lead Time long impacte modérément le MAPE (+" & FORMAT(diff, "0.0") & " pts)",
+        diff > 0,  "Lead Time long : impact faible sur MAPE (+" & FORMAT(diff, "0.0") & " pts)",
+        "✓ Lead Time sans impact significatif sur le MAPE"
+    )
+
+// % de jours en rupture (contexte Supply Chain)
+Taux Rupture % =
+DIVIDE(
+    SUM(forecasts_clean[nb_ruptures]),
+    COUNTROWS(forecasts_clean) * 30,
+    0
+) * 100
+
+// MAPE sur les périodes avec rupture vs sans rupture
+MAPE avec Rupture =
+CALCULATE(
+    [MAPE Moyen],
+    FILTER(forecasts_clean, forecasts_clean[flag_rupture] = TRUE())
+)
+
+MAPE sans Rupture =
+CALCULATE(
+    [MAPE Moyen],
+    FILTER(forecasts_clean, forecasts_clean[flag_rupture] = FALSE())
+)
+
+// Impact des ruptures sur le MAPE — clé pour distinguer écart algo vs opérationnel
+Impact Rupture sur MAPE =
+VAR diff = [MAPE avec Rupture] - [MAPE sans Rupture]
+RETURN
+    IF(
+        diff > 5,
+        "⚠ Les ruptures gonflent le MAPE de " & FORMAT(diff, "0.0") & " pts — écart opérationnel",
+        "✓ Les ruptures n'impactent pas significativement le MAPE"
+    )
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 7 — ALERTES ET MONITORING
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Nombre total d'alertes ouvertes
+Nb Alertes Ouvertes =
+CALCULATE(
+    COUNTROWS(alertes_derive),
+    alertes_derive[statut_alerte] = "OUVERTE"
+)
+
+// Nombre d'alertes critiques
+Nb Alertes Critiques =
+CALCULATE(
+    COUNTROWS(alertes_derive),
+    alertes_derive[criticite] = "CRITIQUE"
+)
+
+// Nombre d'alertes élevées
+Nb Alertes Élevées =
+CALCULATE(
+    COUNTROWS(alertes_derive),
+    alertes_derive[criticite] = "ELEVEE"
+)
+
+// Statut global du système — pour KPI card principale du dashboard
+Statut Global Système =
+VAR critiques = [Nb Alertes Critiques]
+VAR élevées   = [Nb Alertes Élevées]
+VAR total     = [Nb Alertes Ouvertes]
+RETURN
+    SWITCH(
+        TRUE(),
+        critiques > 0, "🔴 CRITIQUE — " & critiques & " alerte(s) critique(s)",
+        élevées   > 0, "🟠 ATTENTION — " & élevées & " alerte(s) élevée(s)",
+        total     > 0, "🟡 SURVEILLANCE — " & total & " alerte(s) en cours",
+        "🟢 NOMINAL — Aucune alerte"
+    )
+
+// % d'alertes Tracking Signal vs MAPE hors cible
+% Alertes Tracking Signal =
+DIVIDE(
+    CALCULATE(
+        COUNTROWS(alertes_derive),
+        alertes_derive[type_alerte] = "TRACKING_SIGNAL"
+    ),
+    COUNTROWS(alertes_derive),
+    0
+) * 100
+
+% Alertes MAPE Hors Cible =
+DIVIDE(
+    CALCULATE(
+        COUNTROWS(alertes_derive),
+        alertes_derive[type_alerte] = "MAPE_HORS_CIBLE"
+    ),
+    COUNTROWS(alertes_derive),
+    0
+) * 100
+
+// Dernière date de traitement (fraîcheur des données)
+Dernière Mise à Jour =
+FORMAT(
+    MAX(performance_metrics[date_traitement]),
+    "DD/MM/YYYY HH:MM"
+)
+
+// Nombre de SKUs monitorés
+Nb SKUs Monitorés =
+DISTINCTCOUNT(forecasts_clean[sku_id])
+
+// Nombre d'algorithmes évalués
+Nb Algorithmes Évalués =
+CALCULATE(
+    DISTINCTCOUNT(performance_metrics[algorithme]),
+    performance_metrics[algorithme] <> "Expert_DP"
+)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 8 — MESURES DE NAVIGATION ET CONTEXTE
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Horizon sélectionné — pour affichage dynamique
+Horizon Sélectionné =
+VAR h = SELECTEDVALUE(performance_metrics[horizon_mois], -1)
+RETURN
+    IF(h = -1, "Tous horizons", h & " mois")
+
+// Segment sélectionné — pour titre dynamique
+Segment Sélectionné =
+SELECTEDVALUE(performance_metrics[segment_abcxyz], "Tous segments")
+
+// Algorithme sélectionné
+Algorithme Sélectionné =
+SELECTEDVALUE(performance_metrics[algorithme], "Tous algorithmes")
+
+// Benchmark rapide — comparaison MAPE algo vs cible
+Benchmark MAPE vs Cible =
+VAR mape_actuel = [MAPE Moyen]
+VAR cible       = [Cible MAPE Segment]
+VAR statut      = IF(mape_actuel <= cible, "✓ Cible atteinte", "✗ Hors cible")
+VAR ecart       = ABS(mape_actuel - cible)
+RETURN
+    statut & " | MAPE = " & FORMAT(mape_actuel, "0.0") &
+    "% | Cible = " & FORMAT(cible, "0.0") &
+    "% | Écart = " & FORMAT(ecart, "0.0") & " pts"
+
+// Résumé exécutif — 1 ligne pour le header du dashboard
+Résumé Exécutif =
+VAR nb_sku      = [Nb SKUs Monitorés]
+VAR nb_algo     = [Nb Algorithmes Évalués]
+VAR mape_global = FORMAT([MAPE Moyen], "0.0")
+VAR nb_alertes  = [Nb Alertes Ouvertes]
+VAR maj         = [Dernière Mise à Jour]
+RETURN
+    nb_sku & " SKUs | " &
+    nb_algo & " algorithmes | " &
+    "MAPE global = " & mape_global & "% | " &
+    nb_alertes & " alerte(s) | Mis à jour : " & maj
+
+// =============================================================================
+// FIN DES MESURES DAX
+//
+// TABLES UTILISÉES :
+//   performance_metrics  → Sections 1, 2, 3, 5, 7, 8
+//   fva_results          → Section 4
+//   alertes_derive       → Section 7
+//   forecasts_clean      → Section 6 (Lead Time + ruptures)
+//
+// VISUELS POWER BI RECOMMANDÉS :
+//   Page 1 — Scorecard principal
+//     → KPI cards : MAPE Moyen, Biais Moyen, Tracking Signal Absolu, Statut Global
+//     → Heatmap ABC/XYZ : Couleur MAPE par segment (matrice 3x3)
+//     → Graphique ligne : MAPE par horizon 1-24 mois par algorithme
+//
+//   Page 2 — FVA Humain vs Algorithmes
+//     → Graphique barres : mape_naive → mape_best_algo → mape_dp par segment
+//     → Table : Verdict FVA Humain par segment
+//     → KPI card : % Segments FVA Positif
+//
+//   Page 3 — Lead Time et Opérationnel
+//     → Barres empilées : LT Besoins + Fabrication + Libération + Diffusion
+//     → Scatter : LT Total vs MAPE par SKU
+//     → Cards : Impact LT sur MAPE, Impact Rupture sur MAPE
+//
+//   Page 4 — Alertes et Dérives
+//     → Table : alertes_derive avec criticité, recommandation Claude IA
+//     → KPI cards : Nb Alertes Critiques, Nb Alertes Élevées
+//     → Graphique Tracking Signal dans le temps par algo/segment
+// =============================================================================
