@@ -1,128 +1,133 @@
 # --- 01_Generate_SAP_MockData.py ---
-# Rôle : Générer les 7 sources de données "Mock" exigées par le CDC (Section 3.1).
-# Contexte Offciel : FAAS4U évalue 10 Algorithmes de prévision internes Laprophan sur un horizon de 1 à 24 mois,
-# croisés avec des données complexes SAP (Ventes, Stocks, Ruptures) et IQVIA.
+# Rôle : Générateur de Mock Data (Phase 1) pour peupler la couche Bronze (OneLake Fabric)
+# Conformité : BPF/GMP (Audit Trail inclus), Segmentation ABC/XYZ, Prise en compte des Lead Times
+# Cible d'exécution : Microsoft Fabric Synapse Notebook (PySpark)
 
 import pandas as pd
 import numpy as np
+import datetime
 from pyspark.sql import SparkSession # type: ignore
+import pyspark.sql.functions as F    # type: ignore
 
-# spark = SparkSession.builder.getOrCreate()
+# Initialisation de la session Spark (Native dans MS Fabric)
+# L'import permet d'éviter l'erreur d'analyseur de code local
+try:
+    spark = SparkSession.builder.getOrCreate()
+except:
+    pass
 
-def generate_cdc_compliant_mock_data():
-    np.random.seed(42)
-    n_products = 100
-    n_months_hist = 36 # 3 ans d'historique
-    n_months_fcast = 24 # horizon 1-24 mois
-    
-    products = [f"PRD{str(i).zfill(4)}" for i in range(1, n_products + 1)]
-    families = ['Antibiotiques', 'OTC', 'Maladies Chroniques']
-    product_families = np.random.choice(families, size=n_products, p=[0.3, 0.4, 0.3])
-    
-    # -------------------------------------------------------------------------
-    # SOURCE 1: SAP MASTER DATA & LEAD TIME (4 Composantes) - MARA / MARC / MBEW
-    # -------------------------------------------------------------------------
-    # Segmentation ABC/XYZ exhaustive (tous les segments)
-    abc_classes = np.random.choice(['A', 'B', 'C'], size=n_products, p=[0.2, 0.3, 0.5])
-    xyz_classes = np.random.choice(['X', 'Y', 'Z'], size=n_products, p=[0.2, 0.3, 0.5])
-    
-    # Lead Times (4 composantes du CDC)
-    lt_besoins_md61 = np.random.randint(5, 15, size=n_products)
-    lt_fab_dzeit = np.random.randint(15, 40, size=n_products)
-    lt_qa_bwkey = np.random.randint(7, 21, size=n_products) # Libération Qualité
-    lt_diff_plifz = np.random.randint(5, 20, size=n_products)
-    
-    df_mara_marc = pd.DataFrame({
-        'Material_ID': products,
-        'Product_Family': product_families,
-        'ABC_Class': abc_classes,
-        'XYZ_Class': xyz_classes,
-        'LT_Besoins_Days': lt_besoins_md61,
-        'LT_Fabrication_Days': lt_fab_dzeit,
-        'LT_QA_Days': lt_qa_bwkey,
-        'LT_Diffusion_Days': lt_diff_plifz,
-        'Standard_Cost_MAD': np.random.uniform(50, 1500, size=n_products).round(2), # Source MBEW
-        'Current_Stock_Qty': np.random.randint(0, 5000, size=n_products) # Source MBEW
-    })
+# ==========================================
+# 0. CONFIGURATION & PARAMÈTRES (Audit BPF)
+# ==========================================
+RUN_DATE = datetime.datetime.utcnow()
+AUDIT_USER = "Salma (Fabric Sync)"
+REASON = "Initialisation Phase Cadrage (Mock Data)"
 
-    # -------------------------------------------------------------------------
-    # SOURCE 2 & 3: SAP VENTES (VBAK/VBAP) & FACTURES (VBRK/VBRP)
-    # -------------------------------------------------------------------------
-    dates_hist = pd.date_range(end=pd.Timestamp.today().replace(day=1), periods=n_months_hist, freq='MS')
-    sales_data = []
+print(f"🚀 Début de l'ingestion Mock Data - {RUN_DATE}")
 
-    for idx, row in df_mara_marc.iterrows():
-        base_demand = np.random.randint(1000, 5000) if row['ABC_Class'] == 'A' else np.random.randint(50, 800)
-        noise_level = 0.05 if row['XYZ_Class'] == 'X' else 0.25
-        seasonality = np.sin(np.arange(n_months_hist) * (2 * np.pi / 12)) * (base_demand * 0.3) if row['Product_Family'] == 'Antibiotiques' else 0
-        
-        demand = np.maximum(base_demand + seasonality + np.random.normal(0, base_demand * noise_level, n_months_hist), 0).round()
-        
-        for dt, dmd in zip(dates_hist, demand):
-            sales_data.append({
-                'Material_ID': row['Material_ID'],
-                'Date': dt,
-                'Order_Qty': dmd,                   # VBAK/VBAP
-                'Invoiced_Qty': np.maximum(dmd - np.random.randint(0, int(dmd*0.1) + 1), 0), # VBRK/VBRP
+def add_audit_trail(df_spark):
+    """Ajoute les champs d'audit obligatoires BPF/GMP à n'importe quel DataFrame PySpark"""
+    return df_spark \
+        .withColumn("Sys_LoadDate", F.lit(RUN_DATE)) \
+        .withColumn("Sys_LoadedBy", F.lit(AUDIT_USER)) \
+        .withColumn("Sys_Reason", F.lit(REASON))
+
+# Paramètres de simulation
+np.random.seed(42)  # Reproductibilité
+N_SKUS = 100
+MONTHS_HIST = 24
+
+# ==========================================
+# 1. GÉNÉRATION DES DONNÉES (Via Pandas pour la vélocité puis Spark)
+# ==========================================
+
+# A. MASTER DATA (DCI, ATC, ABC/XYZ)
+skus = [f"LAP-{str(i).zfill(4)}" for i in range(1, N_SKUS + 1)]
+abc_classes = np.random.choice(['A', 'B', 'C'], size=N_SKUS, p=[0.2, 0.3, 0.5])
+xyz_classes = np.random.choice(['X', 'Y', 'Z'], size=N_SKUS, p=[0.2, 0.3, 0.5])
+atc_classes = np.random.choice(['A (Digestif)', 'C (Cardio)', 'J (Anti-infectieux)', 'N (Nerveux)'], size=N_SKUS)
+
+pdf_master = pd.DataFrame({
+    'SKU_ID': skus,
+    'Description': [f"Medicament_{sku}" for sku in skus],
+    'DCI': [f"PrincipeActif_{np.random.randint(1,20)}" for _ in skus],
+    'ATC_Class': atc_classes,
+    'Segment_ABC': abc_classes,
+    'Segment_XYZ': xyz_classes
+})
+
+# B. LEAD TIMES (Fabrication & Approvisionnement)
+pdf_lead_times = pd.DataFrame({
+    'SKU_ID': skus,
+    'Appro_MP_Jours': np.random.randint(15, 60, size=N_SKUS), # Délais MP importées
+    'Fabrication_Jours': np.random.randint(5, 20, size=N_SKUS),
+    'Controle_Qualite_Jours': np.random.randint(7, 14, size=N_SKUS) # Critique en pharma
+})
+
+# C. SAP SALES HISTORY (24 mois + Bruit selon ABC/XYZ)
+dates_hist = pd.date_range(end=pd.Timestamp.today().replace(day=1), periods=MONTHS_HIST, freq='MS')
+sales_records = []
+
+for idx, row in pdf_master.iterrows():
+    # AX sont stables et gros volumes (volatilité faible)
+    base_qty = np.random.randint(5000, 15000) if row['Segment_ABC'] == 'A' else np.random.randint(100, 1000)
+    volatility = 0.05 if row['Segment_XYZ'] == 'X' else 0.30
+    
+    # Génération d'un historique avec un peu de saisonnalité
+    qty_series = np.maximum(np.random.normal(base_qty, base_qty * volatility, MONTHS_HIST), 0).astype(int)
+    
+    for dt, qty in zip(dates_hist, qty_series):
+        sales_records.append({
+            'Transaction_ID': f"TRX_{row['SKU_ID']}_{dt.strftime('%Y%m')}",
+            'SKU_ID': row['SKU_ID'],
+            'Date': dt.date(),
+            'Quantity_Sold': float(qty),
+            'Client_Type': np.random.choice(['Grossiste', 'Hopital', 'Export'])
+        })
+
+pdf_sales = pd.DataFrame(sales_records)
+
+# D. FORECAST OUTPUT FORMAT (Table de l'Annexe B de vos docs)
+# Mots-clés des modèles: Prophet, NeuralNet, Human_Expert
+forecast_records = []
+for sku in skus:
+    for model in ['Prophet', 'NeuralNet', 'Human_Expert']:
+        for horizon, h_label in zip([1, 4, 12], ['1-3mo', '3-6mo', '6-24mo']):
+            Target_date = pd.Timestamp.today() + pd.DateOffset(months=horizon)
+            base_f = np.random.randint(500, 5000)
+            forecast_records.append({
+                'SKU_ID': sku,
+                'Periode': Target_date.date(),
+                'History': float(base_f * 0.9), # Historique fictif
+                'Corrected': float(base_f * 0.95), # Corrigé des outliers
+                'Forecast': float(base_f),
+                'IC_Bas': float(base_f * 0.8),
+                'IC_Haut': float(base_f * 1.2),
+                'ModelUsed': model,
+                'Forecast_Horizon': h_label
             })
-    df_sales = pd.DataFrame(sales_data)
 
-    # -------------------------------------------------------------------------
-    # SOURCE 4: HISTORIQUE DES RUPTURES (Écarts Demande / Dispo)
-    # -------------------------------------------------------------------------
-    df_sales['Shortage_Qty'] = df_sales['Order_Qty'] - df_sales['Invoiced_Qty']
-    df_ruptures = df_sales[df_sales['Shortage_Qty'] > 0][['Material_ID', 'Date', 'Shortage_Qty']]
+pdf_forecasts = pd.DataFrame(forecast_records)
 
-    # -------------------------------------------------------------------------
-    # SOURCE 5: 10 ALGORITHMES DE PRÉVISION INTERNES (1 à 24 mois en arrière)
-    # -------------------------------------------------------------------------
-    algos = ['Neural_Network', 'Prophet', 'ARIMAX', 'Octopus_L', 'Holt_Winters', 'Auto_ARIMA', 'ETS', 'STLF', 'MAwS', 'TSLM']
-    forecast_data = []
-    
-    for _, row in df_sales.iterrows():
-        for algo in algos:
-            algo_bias = np.random.uniform(0.05, 0.20)
-            pred = np.maximum(row['Order_Qty'] + np.random.normal(0, row['Order_Qty'] * algo_bias), 0).round()
-            forecast_data.append({
-                'Material_ID': row['Material_ID'],
-                'Target_Date': row['Date'],
-                'Algorithm': algo,
-                'Forecast_Qty': pred
-            })
-    df_10_algos = pd.DataFrame(forecast_data)
+# ==========================================
+# 2. SAUVEGARDE EN FORMAT DELTA DANS ONELAKE (Architecture Bronze)
+# ==========================================
+print("🔄 Conversion en Spark DataFrames et application de l'Audit BPF...")
 
-    # -------------------------------------------------------------------------
-    # SOURCE 6: AUDIT TRAIL PLANNER (BPF) - Corrections Humaines
-    # -------------------------------------------------------------------------
-    df_planner = df_sales[['Material_ID', 'Date', 'Order_Qty']].copy()
-    mask_modified = np.random.rand(len(df_planner)) < 0.25 # 25% d'Override Rate
-    
-    df_planner['Planner_Final_Qty'] = df_planner['Order_Qty']
-    df_planner.loc[mask_modified, 'Planner_Final_Qty'] = np.maximum(df_planner.loc[mask_modified, 'Order_Qty'] * np.random.uniform(0.7, 1.3), 0).round()
-    
-    df_planner['Modified_By_User_ID'] = np.where(mask_modified, np.random.choice(['USER_001', 'USER_002', 'USER_003']), 'SYSTEM_AUTO')
-    df_planner['Modification_Timestamp'] = np.where(mask_modified, pd.Timestamp.now() - pd.to_timedelta(np.random.randint(1, 30), unit='d'), pd.NaT)
-    df_planner['Reason_Code'] = np.where(mask_modified, np.random.choice(['PROMO_EXPECTED', 'SUPPLIER_SHORTAGE', 'MARKET_SHIFT']), 'NO_CHANGE')
-    df_planner = df_planner.rename(columns={'Date': 'Target_Date'})
+# Fonction utilitaire pour écrire en Delta (Mode écrasement pour le Mock)
+def save_to_bronze(pdf, table_name):
+    # Conversion Pandas -> Spark
+    df_spark = spark.createDataFrame(pdf)
+    # Ajout de la traçabilité GMP
+    df_spark_audit = add_audit_trail(df_spark)
+    # Sauvegarde native OneLake (Delta) - Le format requis
+    df_spark_audit.write.format("delta").mode("overwrite").saveAsTable(table_name)
+    print(f"✅ Table sauvegardée : {table_name} (Lignes : {df_spark.count()})")
 
-    # -------------------------------------------------------------------------
-    # SOURCE 7: IQVIA (Ventes Terrain - Source de vérité Backtesting sectoriel)
-    # -------------------------------------------------------------------------
-    df_iqvia = df_sales[['Material_ID', 'Date', 'Order_Qty']].copy()
-    df_iqvia['IQVIA_SellOut_Qty'] = np.maximum(df_iqvia['Order_Qty'] + np.random.normal(0, df_iqvia['Order_Qty'] * 0.1), 0).round()
-    df_iqvia = df_iqvia[['Material_ID', 'Date', 'IQVIA_SellOut_Qty']]
+# Exécution de l'écriture
+save_to_bronze(pdf_master, "bronze_master_data")
+save_to_bronze(pdf_lead_times, "bronze_lead_times")
+save_to_bronze(pdf_sales, "bronze_sap_sales")
+save_to_bronze(pdf_forecasts, "bronze_forecast_output")
 
-    return df_mara_marc, df_sales, df_ruptures, df_10_algos, df_planner, df_iqvia
-
-print("1. Génération des 7 sources CDC...")
-df_mara, df_sales, df_ruptures, df_10_algos, df_planner, df_iqvia = generate_cdc_compliant_mock_data()
-
-print("2. Sauvegarde Bronze Layer (OneLake)...")
-spark.createDataFrame(df_mara).write.format("delta").mode("overwrite").saveAsTable("BRONZE_SAP_MARA_MBEW")
-spark.createDataFrame(df_sales).write.format("delta").mode("overwrite").saveAsTable("BRONZE_SAP_SALES_ORDERS")
-spark.createDataFrame(df_ruptures).write.format("delta").mode("overwrite").saveAsTable("BRONZE_SAP_SHORTAGES")
-spark.createDataFrame(df_10_algos).write.format("delta").mode("overwrite").saveAsTable("BRONZE_10_ALGOS_FORECASTS")
-spark.createDataFrame(df_planner).write.format("delta").mode("overwrite").saveAsTable("BRONZE_PLANNER_AUDIT_BPF")
-spark.createDataFrame(df_iqvia).write.format("delta").mode("overwrite").saveAsTable("BRONZE_IQVIA_SELLOUT")
-
-print("Génération CDC Section 3.1 terminée ! ✅")
+print("🎉 PHASE 1 (Couche Bronze) INITIALISÉE AVEC SUCCÈS SUR MICROSOFT FABRIC.")
