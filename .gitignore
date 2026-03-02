@@ -1,31 +1,47 @@
-# IDE / Antigravity
+# =============================================================================
+# FAAS4U — .gitignore
+# =============================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment & Secrets
+.env
+.env.*
+*.env
+
+# Local outputs (CSV, logs)
+outputs/
+*.csv
+*.log
+*.xlsx
+*.out
+*.txt
+*.log.*
+
+# IDE
 .vscode/
 .idea/
 *.swp
-
-# Python / PySpark Temp
-__pycache__/
-*.py[cod]
+*.swo
 *~
-.ipynb_checkpoints/
-
-# Fichiers de données locaux (INTERDIT DE PUSHER DES DONNÉES)
-*.csv
-*.xlsx
-*.parquet
-*.delta/
-data/
-mock_data_local/
-
-# Variables d'environnement & Secrets (BPF Security)
-.env
-secrets.json
-credentials.xml
-
-# Power BI (Ignorer les binaires, utiliser le format .pbip)
-*.pbix
-.pbi/local-cache/
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Spark / Delta local
+spark-warehouse/
+metastore_db/
+derby.log
