@@ -1,3 +1,9 @@
+# CELL 1 — FABRIC ONLY
+import sys, os
+if "synapse" in sys.executable.lower() or \
+   os.environ.get("FABRIC_WORKSPACE_ID"):
+    %pip install anthropic python-dotenv --quiet
+
 # =============================================================================
 # FAAS4U — Laprophan | Couche Gold | Validation Engine (Orchestrator)
 # Fichier  : 03_Validation_Engine.py

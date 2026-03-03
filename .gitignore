@@ -20,6 +20,9 @@ build/
 # Local outputs (CSV, logs)
 outputs/
 *.csv
+temp_*.csv
+test_temp*.csv
+*_mock_*.csv
 *.log
 *.xlsx
 *.out
